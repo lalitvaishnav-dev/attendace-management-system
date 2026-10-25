@@ -3,11 +3,14 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import http from 'http';
 import { fileURLToPath } from 'url';
 import studentRoutes from './routes/studentRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
+import Student from './models/Student.js';
+import { memoryStore } from './data/memoryStore.js';
 
-// 1. Ensure dotenv loads the correct backend/.env regardless of CWD
+// 1. Ensure dotenv loads backend/.env regardless of CWD
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '.env') });
@@ -23,19 +26,20 @@ app.use(express.json());
 app.use('/api/students', studentRoutes);
 app.use('/api/attendance', attendanceRoutes);
 
-// Health check endpoint
+// Health & Status check endpoint
 app.get('/api/health', (req, res) => {
+  const isConnected = mongoose.connection.readyState === 1;
   res.json({
     status: 'ok',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     service: 'Student Attendance API',
+    database: isConnected ? 'connected' : 'disconnected',
+    storageMode: isConnected ? 'MongoDB Atlas' : 'In-Memory Fallback',
     timestamp: new Date().toISOString(),
   });
 });
 
 /**
- * Validate MongoDB connection configuration
- * Ensures MONGO_URI exists and does not contain unresolved placeholders
+ * Validate MongoDB configuration in .env
  */
 function validateMongoConfig() {
   const uri = process.env.MONGO_URI;
@@ -65,11 +69,10 @@ function validateMongoConfig() {
     }
   }
 
-  // Check for any unescaped angle bracket placeholders like <something>
   if (/<[^>]+>/.test(uri)) {
     return {
       valid: false,
-      reason: 'MONGO_URI contains unresolved angle-bracket placeholders (e.g. <...>).',
+      reason: 'MONGO_URI contains unresolved angle-bracket placeholders.',
     };
   }
 
@@ -77,7 +80,7 @@ function validateMongoConfig() {
 }
 
 /**
- * Get masked host/database target for safe logging without exposing passwords
+ * Safe target name for logging
  */
 function getSanitizedTarget(uri) {
   try {
@@ -92,66 +95,114 @@ function getSanitizedTarget(uri) {
 }
 
 /**
- * Connect to MongoDB and start Express server asynchronously
+ * Seed initial students into MongoDB if collection is empty
  */
-async function startServer() {
-  const validation = validateMongoConfig();
-
-  if (!validation.valid) {
-    console.error('\n======================================================');
-    console.error('❌ MONGODB CONFIGURATION ERROR');
-    console.error('======================================================');
-    console.error(`Issue: ${validation.reason}`);
-    console.error('\n👉 Action Required:');
-    console.error('1. Open file: backend/.env');
-    console.error('2. Replace the placeholder in MONGO_URI with your actual MongoDB Atlas password.');
-    console.error('   Expected format:');
-    console.error('   MONGO_URI=mongodb+srv://Student06:<ACTUAL_PASSWORD>@cluster0.fcltfbm.mongodb.net/smart_attendance?retryWrites=true&w=majority');
-    console.error('3. In MongoDB Atlas:');
-    console.error('   - Go to Security → Database Access.');
-    console.error('   - Verify user "Student06" exists (or create it with "Read and write to any database").');
-    console.error('   - If you forgot the password, click "Edit" on user "Student06" and set a new password.');
-    console.error('4. If your password contains special characters (@, :, #, %, etc.), URL-encode them.');
-    console.error('======================================================\n');
-    process.exit(1);
-  }
-
-  const sanitizedTarget = getSanitizedTarget(validation.uri);
-
+async function seedDatabaseIfEmpty() {
   try {
-    console.log(`Connecting to MongoDB Atlas target: ${sanitizedTarget}...`);
-    await mongoose.connect(validation.uri);
-    console.log(' Successfully connected to MongoDB Atlas');
-
-    const server = app.listen(PORT, () => {
-      console.log(` Server is running on http://localhost:${PORT}`);
-    });
-
-    return server;
-  } catch (err) {
-    console.error('\n======================================================');
-    console.error('❌ MONGODB CONNECTION FAILED');
-    console.error('======================================================');
-
-    if (err.message && err.message.toLowerCase().includes('authentication failed')) {
-      console.error('Root Cause: Invalid Credentials (Authentication Failed).');
-      console.error('- The username "Student06" or the provided password does not match MongoDB Atlas.');
-      console.error('- Go to MongoDB Atlas → Security → Database Access.');
-      console.error('- Verify the user name is exactly "Student06" (case-sensitive).');
-      console.error('- Reset the user password if necessary, and update backend/.env.');
-      console.error('- Ensure characters such as "@", ":", "/", "#" in password are URL-encoded.');
-    } else {
-      console.error(`Error: ${err.message}`);
-      console.error('- Verify Atlas Network Access (Security → Network Access) includes your current IP address.');
-      console.error('- Verify cluster hostname "cluster0.fcltfbm.mongodb.net" is reachable.');
+    const count = await Student.countDocuments();
+    if (count === 0) {
+      console.log('🌱 Seeding initial students into MongoDB Atlas...');
+      const seedList = memoryStore.getAllInitialStudents();
+      await Student.insertMany(seedList);
+      console.log(`✅ Seeded ${seedList.length} students into MongoDB Atlas successfully!`);
     }
-
-    console.error('======================================================\n');
-    process.exit(1);
+  } catch (err) {
+    console.warn('⚠️ Note on database seeding:', err.message);
   }
 }
 
-// Start the application
+/**
+ * Background MongoDB connection manager with retry
+ */
+let isConnecting = false;
+let retryTimer = null;
+
+async function connectToMongoWithRetry(uri, sanitizedTarget) {
+  if (mongoose.connection.readyState === 1 || isConnecting) {
+    return;
+  }
+
+  isConnecting = true;
+  try {
+    console.log(`🔄 Attempting to connect to MongoDB Atlas (${sanitizedTarget})...`);
+    await mongoose.connect(uri, {
+      serverSelectionTimeoutMS: 6000,
+      connectTimeoutMS: 6000,
+    });
+
+    console.log('🎉 Successfully connected to MongoDB Atlas!');
+    await seedDatabaseIfEmpty();
+  } catch (err) {
+    const errMsg = err.message || '';
+    const isTlsOrWhitelist =
+      errMsg.includes('whitelist') ||
+      errMsg.includes('alert number 80') ||
+      errMsg.includes('ServerSelectionError') ||
+      errMsg.includes('tlsv1 alert internal error');
+
+    console.warn('\n======================================================');
+    console.warn('⚠️  MONGODB ATLAS IS CURRENTLY UNREACHABLE');
+    console.warn('======================================================');
+    if (isTlsOrWhitelist) {
+      console.warn('Reason: MongoDB Atlas rejected the connection (IP not whitelisted).');
+      console.warn('👉 Fix:');
+      console.warn('1. Open MongoDB Atlas (https://cloud.mongodb.com)');
+      console.warn('2. Go to: Security → Network Access');
+      console.warn('3. Click "Add IP Address" and select:');
+      console.warn('   - "Allow Access from Anywhere" (0.0.0.0/0) OR add your current public IP.');
+      console.warn('4. Click "Confirm". Atlas takes ~1 minute to update rules.');
+    } else {
+      console.warn(`Reason: ${errMsg}`);
+    }
+    console.warn('------------------------------------------------------');
+    console.warn('💡 Resilient Fallback Active: Server is serving data via in-memory store.');
+    console.warn('🔄 Auto-reconnect scheduled in 10 seconds...');
+    console.warn('======================================================\n');
+
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      connectToMongoWithRetry(uri, sanitizedTarget);
+    }, 10000);
+  } finally {
+    isConnecting = false;
+  }
+}
+
+// React to disconnection events
+mongoose.connection.on('disconnected', () => {
+  console.warn('🔌 MongoDB connection dropped. Initiating reconnect loop...');
+  const validation = validateMongoConfig();
+  if (validation.valid) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      connectToMongoWithRetry(validation.uri, getSanitizedTarget(validation.uri));
+    }, 5000);
+  }
+});
+
+/**
+ * Start the Express API server
+ */
+function startServer() {
+  const server = app.listen(PORT, () => {
+    console.log(`\n======================================================`);
+    console.log(`🚀 EduTrack API Server running on http://localhost:${PORT}`);
+    console.log(`📡 Health Check: http://localhost:${PORT}/api/health`);
+    console.log(`======================================================`);
+  });
+
+  const validation = validateMongoConfig();
+  if (validation.valid) {
+    const sanitizedTarget = getSanitizedTarget(validation.uri);
+    connectToMongoWithRetry(validation.uri, sanitizedTarget);
+  } else {
+    console.warn(`⚠️ Warning: ${validation.reason}`);
+    console.warn('Server started with In-Memory fallback mode.');
+  }
+
+  return server;
+}
+
 startServer();
 
 export default app;

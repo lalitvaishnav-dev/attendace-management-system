@@ -14,7 +14,7 @@ const Login = () => {
     setTimeout(() => {
       setLoading(false);
       navigate('/');
-    }, 600);
+    }, 500);
   };
 
   return (
@@ -31,12 +31,13 @@ const Login = () => {
             height: '54px',
             margin: '0 auto 1rem',
             borderRadius: '14px',
-            background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+            background: 'linear-gradient(135deg, #4f46e5 0%, #2563eb 100%)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: '1.5rem',
-            boxShadow: '0 0 20px rgba(99, 102, 241, 0.4)',
+            boxShadow: '0 8px 16px rgba(79, 70, 229, 0.25)',
+            color: '#fff',
           }}>
             🔐
           </div>
@@ -73,18 +74,18 @@ const Login = () => {
             alignItems: 'center',
             marginBottom: '1.5rem',
             fontSize: '0.85rem',
-            color: 'var(--text-muted)',
+            color: '#64748b',
           }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" defaultChecked /> Remember me
+              <input type="checkbox" defaultChecked style={{ accentColor: '#4f46e5' }} /> Remember me
             </label>
-            <a href="#" style={{ color: 'var(--primary)' }}>Forgot password?</a>
+            <a href="#" style={{ color: '#4f46e5', fontWeight: 600 }}>Forgot password?</a>
           </div>
 
           <button
             type="submit"
             className="btn btn-primary"
-            style={{ width: '100%', padding: '0.8rem' }}
+            style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem' }}
             disabled={loading}
           >
             {loading ? 'Signing in...' : 'Sign In'}
@@ -93,15 +94,15 @@ const Login = () => {
 
         <div style={{
           marginTop: '1.5rem',
-          padding: '0.75rem',
+          padding: '0.75rem 1rem',
           borderRadius: '8px',
-          background: 'rgba(255, 255, 255, 0.03)',
-          border: '1px solid var(--border-subtle)',
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
           fontSize: '0.8rem',
-          color: 'var(--text-muted)',
+          color: '#475569',
           textAlign: 'center',
         }}>
-          💡 <strong>Demo Mode:</strong> Click "Sign In" with prefilled credentials.
+          💡 <strong>Authorized Access:</strong> Click "Sign In" with prefilled faculty credentials.
         </div>
       </div>
     </div>

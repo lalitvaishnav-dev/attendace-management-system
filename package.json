@@ -1,0 +1,10 @@
+{
+  "name": "student-attendance-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack Student Attendance Management System",
+  "scripts": {
+    "backend": "npm --prefix backend run dev",
+    "frontend": "npm --prefix frontend run dev"
+  }
+}
